@@ -7,35 +7,29 @@ package gochat
 import(
 	"net"
 	"fmt"
-	"strconv"
-	"bytes"
-	"strings"
 	"io/ioutil"
 	"os"
+	"bufio"
+	"strings"
 )
 
 type user struct {
 	username string
 	userid string
 	online bool
+	connection net.Conn
 }
 
 // Adds a new user to the specified user collection - returns that user
-func  (UC userCollection)  AddUser (name string, address string) user {
+func  (UC *userCollection)  AddUser (name string, address string, cn net.Conn) {
 	// @todo log: adding a user
-	// @todo use a list instead
-	u := user{username:name + strconv.Itoa(UC._users_count), userid:address, online:true}
-	UC._users[UC._users_count] = u
-	UC._users_count++
-	return u
+	u := user{username:name, userid:address, online:true, connection:cn}
+	UC._users = append(UC._users, &u)
 }
 
 type userCollection struct {
-	_users [10]user //@todo use pointers for users?
-	_users_count int
+	_users []*user
 }
-
-//var broadcast = make(chan string, 2)
 
 func RunServer() {
 	// create logger
@@ -43,48 +37,45 @@ func RunServer() {
 	// listen
 	ln, errors := net.Listen("tcp", ":8080")
 	// create the user collection
-	uc := userCollection{_users_count:0}
+	uc := userCollection{_users:make([]*user, 0)}
 
 	if errors != nil {
 		panic(errors) // ???
 	}
-	ch := make(chan string, 2)
-	go channelTest(ch)
+//	ch := make(chan []byte, 5)
+//	go broadcast(ch, uc)
 	for {
 		connection, error := ln.Accept()
 		if errors != nil {
 			fmt.Println(error)
 		} else {
 			// start chatting
-			go doSomething(connection,uc, ch)
+			go handleConnection (connection, &uc)
 		}
 	}
 }
 
-func channelTest(ch chan string) {
-	for {
-		fmt.Print(<- ch)
-	}
-}
-
-func doSomething (connection net.Conn, uc userCollection, ch chan string) {
-	u := uc.AddUser("User", connection.RemoteAddr().String())
-	//@todo prompt for or assign username
-	welcomeMessage := "Hello, " + u.username + ".\n"
-	connection.Write([]byte(welcomeMessage))
+func handleConnection (connection net.Conn, uc *userCollection) {
 	messages := 0
+	connection.Write([]byte("Enter your username: "))
+	readUsername := false
+	username := ""
 	for {
-		input := make([]byte, 256)
-		//@todo convert to use channels? each user will send to a universal receiving channel that will broadcast the messages
-		connection.Read(input)
-		input_processed, is_command := processInput(input)
-		if(!is_command) {
-//			fmt.Printf("%v: %s", u.username, input_processed) // @todo broadcast to channel
-			text := fmt.Sprintf("%v: %s", u.username, input_processed)
-			ch <- text
+		input, is_command := readInput(connection)
+		if(readUsername == false) { // only in first iteration
+			uc.AddUser(input, connection.RemoteAddr().String(), connection)
+			username = input
+			welcomeMessage := fmt.Sprintf("%v has entered the chat.", username)
+			uc.broadcast(welcomeMessage, "")
+//			ch <- []byte(welcomeMessage)
+			readUsername = true
+		} else if(!is_command) {
+			text := fmt.Sprintf("%v: %s", username, input)
+			uc.broadcast(text, username)
+//			ch <- []byte(text) // send to the broadcast stream
 		} else {
-			// user has entered a command
-			if(input_processed == "/quit") {
+//			 user has entered a command
+			if(input == "/quit") {
 				connection.Write([]byte("Goodbye.\n"))
 				defer connection.Close()
 				break
@@ -100,8 +91,16 @@ func doSomething (connection net.Conn, uc userCollection, ch chan string) {
 	}
 }
 
-func processInput (input []byte) (string, bool) {
-	output := string(bytes.Trim(input, "\x00"))
-	return output, strings.HasPrefix(output, "/")
+func (uc *userCollection) broadcast (msg string, usr string) {
+	for i := 0; i < len(uc._users); i++ {
+		if uc._users[i].username != usr {
+			uc._users[i].connection.Write([]byte(msg + "\n")) // getting there
+		}
+	}
 }
 
+func readInput(cn net.Conn) (string, bool) {
+	buf := bufio.NewReader(cn)
+	output, _ := buf.ReadString('\n')
+	return strings.TrimSpace(output), false // hacky way to remove newline
+}
