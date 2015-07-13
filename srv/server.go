@@ -23,12 +23,10 @@ func RunServer() {
 	}
 	Trace.Println("Creating userCollection with _users:make([]*user, 0)")
 	uc := userCollection{_users:make([]*user, 0)}
-//	ch := make(chan []byte, 5)
-//	go broadcast(ch, uc)
 	for {
 		connection, err := ln.Accept()
 		if err != nil {
-			Error.Println("Errors while connecting: ",error)
+			Error.Println("Errors while connecting: ",err)
 			os.Exit(1)
 		} else {
 			// start chatting
@@ -58,6 +56,7 @@ func  (UC *userCollection)  AddUser (name string, address string, cn net.Conn) *
 	return &u
 }
 
+// There is one goroutine of handleConnection for each user
 func handleConnection (connection net.Conn, uc *userCollection) {
 
 	var usr *user;
@@ -68,7 +67,6 @@ func handleConnection (connection net.Conn, uc *userCollection) {
 		usr = uc.AddUser(input, connection.RemoteAddr().String(), connection)
 		welcomeMessage := fmt.Sprintf("%v has entered the chat.", input)
 		uc.broadcast(welcomeMessage, "")
-		//	ch <- []byte(welcomeMessage)
 		break initial_loop
 	}
 
@@ -82,7 +80,6 @@ func handleConnection (connection net.Conn, uc *userCollection) {
 		if(!is_command) {
 			text := fmt.Sprintf("%v: %s", usr.username, input)
 			uc.broadcast(text, usr.username)
-//			ch <- []byte(text) // send to the broadcast stream
 		} else {
 			command := strings.Split(input, " ")
 			switch command[0] {
@@ -94,7 +91,7 @@ func handleConnection (connection net.Conn, uc *userCollection) {
 				case "/list":
 					connection.Write([]byte(uc.getUserListString()))
 				case "/kick":
-					if len(command) > 1 {
+					if len(command) > 1 { // if there is an argument to the command
 						result := uc.kickUser(command[1])
 						if result {
 							connection.Write([]byte("You kicked " + command[1] + ".\n"))
@@ -102,20 +99,23 @@ func handleConnection (connection net.Conn, uc *userCollection) {
 							connection.Write([]byte("No such user is online.\n"))
 						}
 					}
+				case "/msg":
+					// @todo: implement /msg
 			}
 		}
 	}
 }
 
 // Broadcasts a message to all connected users : takes the message as a string and the username of the sender
-func (uc *userCollection) broadcast (msg string, usr string) {
-	for i := 0; i < len(uc._users); i++ {
-		if uc._users[i].username != usr { // when called, no need to broadcast to the sending user (usually)
-			uc._users[i].connection.Write([]byte(msg + "\n")) // getting there
+func (uc *userCollection) broadcast (msg string, sendingUser string) {
+	for _, usr := range uc._users {
+		if usr.username != sendingUser { // when called, no need to broadcast to the sending user (usually)
+			usr.connection.Write([]byte(msg + "\n"))
 		}
 	}
 }
 
+// Reads from a connection and returns the string and if it looks like a command
 func readInput(cn net.Conn) (string, bool) {
 	buf := bufio.NewReader(cn)
 	output, _ := buf.ReadString('\n')
@@ -123,6 +123,7 @@ func readInput(cn net.Conn) (string, bool) {
 	return output, strings.HasPrefix(output,"/")
 }
 
+// Returns a formatted string of online users
 func (uc *userCollection) getUserListString() string {
 	output := "Username :: Online :: Network Location"
 	for i := 0; i < len(uc._users); i++ {
@@ -132,6 +133,7 @@ func (uc *userCollection) getUserListString() string {
 	return strings.Join([]string{output,""}, "\n")
 }
 
+// Kicks a user; returns true if user is online & is successful
 func (uc *userCollection) kickUser (userString string) bool {
 	for _, u := range uc._users {
 		if u.username == userString && u.online == true {
